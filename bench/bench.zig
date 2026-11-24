@@ -22,8 +22,8 @@
 //!   the repeated calls (reset, the full report) clobber memory after each.
 //!
 //! `zig build bench -- <runs> <workload>` sets the number of runs (default
-//! 11) and runs one workload alone (`steady`, `fill_free`, `churn`, `reset`
-//! or `report_full`), as when profiling one.
+//! 11) and runs one workload alone (`steady`, `fill_free`, `churn`, `small`,
+//! `bin_search`, `reset`, `report` or `report_full`), as when profiling one.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -47,9 +47,23 @@ const churn_resident = 2000;
 const churn_per_frame = 256;
 const churn_frames = 400;
 const churn_bytes: u64 = 64 << 10;
+const small_count = 30_000;
+const small_rounds = 10;
+const small_units_max = 16;
+const search_pairs = 8000;
+const search_hole_units = 4096;
+const search_per_frame = 256;
+const search_frames = 200;
 const reset_count = 50;
 const report_count = 200;
-const handles_max = @max(steady_live, fill_count, churn_resident + churn_per_frame);
+const report_short_count = 100_000;
+const handles_max = @max(
+    steady_live,
+    fill_count,
+    churn_resident + churn_per_frame,
+    small_count,
+    2 * search_pairs + search_per_frame,
+);
 
 /// A GPU-like size mix: mostly small uniform and vertex chunks, some
 /// medium buffers, a few large textures.
@@ -76,11 +90,31 @@ const Script = struct {
     slots: []const u32,
     /// The even slots below `fill_count`.
     evens: []const u32,
+    /// Small sizes, 1 to `small_units_max` units, and a permutation of
+    /// their slots to free them in.
+    small_units: []const u32,
+    small_bytes: []const u64,
+    small_slots: []const u32,
+    /// Pairs of a 1-unit allocation and a hole of `search_hole_units`,
+    /// the odd slots (the holes) to free, and the requests that go into
+    /// the holes: log-uniform, 1 to `search_hole_units` units.
+    pair_units: []const u32,
+    pair_bytes: []const u64,
+    odds: []const u32,
+    search_units: []const u32,
+    search_bytes: []const u64,
 };
 
 /// A side's results folded into one number: its handles' offsets in units
 /// and node indices, or a report's region counts.
 const Digest = u64;
+
+/// As bench/original.cpp's `clobberMemory`: the compiler must assume any
+/// memory reachable from outside was read or changed, so a call repeated in a
+/// loop is made every time and its result stored.
+inline fn clobberMemory() void {
+    asm volatile ("" ::: .{ .memory = true });
+}
 
 fn fold(digest: Digest, a: u64, b: u64) Digest {
     return (digest ^ a ^ (b << 32)) *% 0x9e37_79b9_7f4a_7c15;
@@ -133,6 +167,12 @@ fn Original(comptime prefix: []const u8, comptime NodeIndex: type) type {
             "report_full_times",
             fn (*Cxx, u32, *Report) callconv(.c) void,
         );
+        const report_times = function(
+            "report_times",
+            fn (*Cxx, u32, *ShortReport) callconv(.c) void,
+        );
+        /// The original's `StorageReport`.
+        const ShortReport = extern struct { total_free_space: u32, largest_free_region: u32 };
 
         fn init(gpa: std.mem.Allocator) !Self {
             _ = gpa;
@@ -147,6 +187,24 @@ fn Original(comptime prefix: []const u8, comptime NodeIndex: type) type {
 
         fn sizes(script: Script) []const u32 {
             return script.units;
+        }
+
+        fn smallSizes(script: Script) []const u32 {
+            return script.small_units;
+        }
+
+        fn pairSizes(script: Script) []const u32 {
+            return script.pair_units;
+        }
+
+        fn searchSizes(script: Script) []const u32 {
+            return script.search_units;
+        }
+
+        fn reportTimes(self: *Self, count: u32) Digest {
+            var report: ShortReport = undefined;
+            report_times(self.allocator, count, &report);
+            return fold(0, report.total_free_space, report.largest_free_region);
         }
 
         fn allocateEach(self: *Self, request: []const u32, handles: []Handle) !void {
@@ -218,6 +276,32 @@ fn Port(comptime Core: type) type {
 
         fn sizes(script: Script) []const u32 {
             return script.units;
+        }
+
+        fn smallSizes(script: Script) []const u32 {
+            return script.small_units;
+        }
+
+        fn pairSizes(script: Script) []const u32 {
+            return script.pair_units;
+        }
+
+        fn searchSizes(script: Script) []const u32 {
+            return script.search_units;
+        }
+
+        fn reportTimes(self: *Self, count: u32) Digest {
+            var report: oa.StorageReport = undefined;
+            reportInto(self, count, &report);
+            return fold(0, report.total_free_space, report.largest_free_region);
+        }
+
+        noinline fn reportInto(self: *Self, count: u32, report: *oa.StorageReport) void {
+            for (0..count) |_| {
+                clobberMemory();
+                report.* = self.core.storageReport();
+                clobberMemory();
+            }
         }
 
         noinline fn allocateEach(self: *Self, request: []const u32, handles: []Handle) !void {
@@ -293,6 +377,32 @@ fn Layer(comptime Core: type) type {
             return script.bytes;
         }
 
+        fn smallSizes(script: Script) []const u64 {
+            return script.small_bytes;
+        }
+
+        fn pairSizes(script: Script) []const u64 {
+            return script.pair_bytes;
+        }
+
+        fn searchSizes(script: Script) []const u64 {
+            return script.search_bytes;
+        }
+
+        fn reportTimes(self: *Self, count: u32) Digest {
+            var report: Ranges.StorageReport = undefined;
+            reportInto(self, count, &report);
+            return fold(0, report.total_free_space / unit, report.largest_free_region / unit);
+        }
+
+        noinline fn reportInto(self: *Self, count: u32, report: *Ranges.StorageReport) void {
+            for (0..count) |_| {
+                clobberMemory();
+                report.* = self.ranges.storageReport();
+                clobberMemory();
+            }
+        }
+
         noinline fn allocateEach(self: *Self, request: []const u64, handles: []Handle) !void {
             for (request, handles) |size, *handle| handle.* = try self.ranges.allocate(size);
         }
@@ -348,7 +458,10 @@ const Workload = enum {
     steady,
     fill_free,
     churn,
+    small,
+    bin_search,
     reset,
+    report,
     report_full,
 
     fn label(workload: Workload) []const u8 {
@@ -356,7 +469,10 @@ const Workload = enum {
             .steady => "steady state, 10k live",
             .fill_free => "fill 10k, free all",
             .churn => "churn, 256 x 64 KiB per frame",
+            .small => "fill 30k small, free all",
+            .bin_search => "bin search, 8000 holes",
             .reset => "reset",
+            .report => "storageReport",
             .report_full => "storageReportFull, 5001 free regions",
         };
     }
@@ -364,14 +480,23 @@ const Workload = enum {
     /// The calls a run times, one or two.
     fn ops(workload: Workload) []const []const u8 {
         return switch (workload) {
-            .steady, .fill_free, .churn => &.{ "allocate", "free" },
+            .steady, .fill_free, .churn, .small, .bin_search => &.{ "allocate", "free" },
             .reset => &.{"reset"},
-            .report_full => &.{"report"},
+            .report, .report_full => &.{"report"},
         };
     }
 };
 
-const workloads = [_]Workload{ .steady, .fill_free, .churn, .reset, .report_full };
+const workloads = [_]Workload{
+    .steady,
+    .fill_free,
+    .churn,
+    .small,
+    .bin_search,
+    .reset,
+    .report,
+    .report_full,
+};
 
 /// One run of a workload on one side: ns per call of each op it times, and
 /// the digest of its results.
@@ -454,6 +579,46 @@ fn runOnce(
             }
             digest = S.digestOf(handles[0 .. churn_resident + churn_per_frame]);
         },
+        // `small_count` allocations of 1 to 16 units, then all freed in
+        // random order: many nodes, few bins.
+        .small => {
+            const all = handles[0..small_count];
+            for (0..small_rounds) |_| {
+                const t0 = now(io);
+                try side.allocateEach(S.smallSizes(script), all);
+                const t1 = now(io);
+                digest = fold(digest, S.digestOf(all), 0);
+                const t2 = now(io);
+                side.freeFrom(all, script.small_slots);
+                const t3 = now(io);
+                ns[0] += nsBetween(t0, t1);
+                ns[1] += nsBetween(t2, t3);
+                calls += small_count;
+            }
+        },
+        // `search_pairs` holes of `search_hole_units` between 1-unit
+        // allocations; every frame allocates requests of any size up to a
+        // hole, whose own bins are mostly empty, so allocate searches the
+        // bins above, then frees them in order, merging the holes back.
+        .bin_search => {
+            const pairs = handles[0 .. 2 * search_pairs];
+            try side.allocateEach(S.pairSizes(script), pairs);
+            side.freeFrom(pairs, script.odds);
+            const frame = handles[2 * search_pairs ..][0..search_per_frame];
+            const requests = S.searchSizes(script);
+            for (0..search_frames) |f| {
+                const t0 = now(io);
+                try side.allocateEach(requests[f * search_per_frame ..][0..search_per_frame], frame);
+                const t1 = now(io);
+                digest = fold(digest, S.digestOf(frame), 0);
+                const t2 = now(io);
+                side.freeEach(frame);
+                const t3 = now(io);
+                ns[0] += nsBetween(t0, t1);
+                ns[1] += nsBetween(t2, t3);
+                calls += search_per_frame;
+            }
+        },
         // Resets of an allocator holding `steady_live` allocations, then of
         // the empty one: neither side's reset depends on the state.
         .reset => {
@@ -464,6 +629,17 @@ fn runOnce(
             const t1 = now(io);
             ns[0] = nsBetween(t0, t1);
             calls = reset_count;
+        },
+        // `storageReport` over the state `report_full` reports on.
+        .report => {
+            const all = handles[0..fill_count];
+            try side.allocateEach(request[0..fill_count], all);
+            side.freeFrom(all, script.evens);
+            const t0 = now(io);
+            digest = side.reportTimes(report_short_count);
+            const t1 = now(io);
+            ns[0] = nsBetween(t0, t1);
+            calls = report_short_count;
         },
         // `fill_count` allocations with every other one freed: 5000 free
         // regions between them, and the rest of the space.
@@ -503,7 +679,48 @@ fn makeScript(gpa: std.mem.Allocator) !Script {
     }
     const evens = try gpa.alloc(u32, fill_count / 2);
     for (evens, 0..) |*e, k| e.* = @intCast(2 * k);
-    return .{ .bytes = bytes, .units = size_units, .slots = slots, .evens = evens };
+
+    const small_bytes = try gpa.alloc(u64, small_count);
+    const small_units = try gpa.alloc(u32, small_count);
+    for (small_bytes, small_units) |*b, *u| {
+        u.* = random.intRangeAtMost(u32, 1, small_units_max);
+        b.* = @as(u64, u.*) * unit;
+    }
+    const small_slots = try gpa.alloc(u32, small_count);
+    for (small_slots, 0..) |*s, k| s.* = @intCast(k);
+    random.shuffle(u32, small_slots);
+
+    const pair_bytes = try gpa.alloc(u64, 2 * search_pairs);
+    const pair_units = try gpa.alloc(u32, 2 * search_pairs);
+    for (pair_bytes, pair_units, 0..) |*b, *u, k| {
+        u.* = if (k % 2 == 0) 1 else search_hole_units;
+        b.* = @as(u64, u.*) * unit;
+    }
+    const odds = try gpa.alloc(u32, search_pairs);
+    for (odds, 0..) |*o, k| o.* = @intCast(2 * k + 1);
+    const search_bytes = try gpa.alloc(u64, search_frames * search_per_frame);
+    const search_units = try gpa.alloc(u32, search_frames * search_per_frame);
+    const hole_bits = std.math.log2_int(u32, search_hole_units);
+    for (search_bytes, search_units) |*b, *u| {
+        const exponent = random.float(f64) * @as(f64, @floatFromInt(hole_bits));
+        u.* = @intFromFloat(@floor(@exp2(exponent)));
+        b.* = @as(u64, u.*) * unit;
+    }
+
+    return .{
+        .bytes = bytes,
+        .units = size_units,
+        .slots = slots,
+        .evens = evens,
+        .small_units = small_units,
+        .small_bytes = small_bytes,
+        .small_slots = small_slots,
+        .pair_units = pair_units,
+        .pair_bytes = pair_bytes,
+        .odds = odds,
+        .search_units = search_units,
+        .search_bytes = search_bytes,
+    };
 }
 
 /// ns per call over the runs, for each side (original, port, layer) and

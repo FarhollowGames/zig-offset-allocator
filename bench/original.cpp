@@ -24,6 +24,7 @@
 
 using OffsetAllocator::Allocation;
 using OffsetAllocator::Allocator;
+using OffsetAllocator::StorageReport;
 using OffsetAllocator::StorageReportFull;
 
 // Makes the compiler assume that any memory reachable from outside may have
@@ -91,6 +92,16 @@ void OA(report_full_times)(Allocator *allocator, uint32_t count, StorageReportFu
     for (uint32_t i = 0; i < count; i++)
     {
         *report = allocator->storageReportFull();
+        clobberMemory();
+    }
+}
+
+void OA(report_times)(Allocator *allocator, uint32_t count, StorageReport *report)
+{
+    for (uint32_t i = 0; i < count; i++)
+    {
+        clobberMemory();
+        *report = allocator->storageReport();
         clobberMemory();
     }
 }
