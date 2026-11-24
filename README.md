@@ -33,10 +33,10 @@ and links no libc or libc++. The original is listed under
 ## Install
 
 ```sh
-zig fetch --save git+https://github.com/farhollowgames/zig-offset-allocator#v0.1.0
+zig fetch --save git+https://github.com/farhollowgames/zig-offset-allocator#v0.1.3
 ```
 
-`v0.1.0` is the latest release. The package needs Zig 0.17.0.
+`v0.1.3` is the latest release. The package needs Zig 0.17.0.
 
 In `build.zig`:
 
