@@ -7,15 +7,12 @@
 //! - `Ranges.storageReport().largest_free_region` against the core's, in
 //!   bytes: no other test compares it outside two fixed states.
 //! - `init` out of memory for `Allocator16` and `Ranges16`.
-//! - Opt-in (`-Dskeptic-slow=true`, about 3 minutes in ReleaseSafe): a `Ranges` generation
-//!   wraps after 2^32 allocate/free cycles of one node, so a stale handle
-//!   reads as live again and a double free is not caught.
+//! - A `Ranges` generation after 2^32 allocate/free cycles of one node, set
+//!   directly: a stale handle must not read as live again.
 
 const std = @import("std");
 const testing = std.testing;
 const oa = @import("offset_allocator");
-
-const slow: bool = @import("build_options").skeptic_slow;
 
 const Cxx = opaque {};
 
@@ -297,24 +294,24 @@ test "skeptic: init out of memory frees what it took, Allocator16 and Ranges16" 
     }
 }
 
-test "skeptic (slow, opt-in): a generation wraps after 2^32 cycles of one node" {
-    if (!slow) return error.SkipZigTest;
+test "skeptic: a Ranges generation does not wrap after 2^32 cycles of one node" {
     var ranges = try oa.Ranges.init(testing.allocator, 1 << 20, 16, 256);
     defer ranges.deinit(testing.allocator);
-    // Allocate and free the same size: the core gives the same node back
-    // every time, so its generation moves on by one per cycle.
+    // Allocating and freeing one size gives the same node back every time,
+    // so its generation moves on by one per cycle: an ordinary transient
+    // allocation reaches 2^32 cycles in minutes.
     const stale = try ranges.allocate(256);
     ranges.free(stale);
-    const start = std.Io.Clock.awake.now(testing.io);
     var current = try ranges.allocate(256);
-    var cycles: u64 = 1;
-    while (cycles < (1 << 32)) : (cycles += 1) {
-        ranges.free(current);
-        current = try ranges.allocate(256);
-    }
-    std.debug.print("2^32 allocate/free cycles of node {d} in {d} s\n", .{ current.node, @divTrunc(start.durationTo(std.Io.Clock.awake.now(testing.io)).toNanoseconds(), std.time.ns_per_s) });
+    try testing.expectEqual(stale.node, current.node);
+    // Where 2^32 - 2 more cycles would leave the generation.
+    ranges.generations[current.node] = std.math.maxInt(u32);
+    current.generation = std.math.maxInt(u32);
+    ranges.free(current);
+    current = try ranges.allocate(256);
     try testing.expectEqual(stale.node, current.node);
     // `stale` was freed 2^32 cycles ago. It must not be live, or a second
     // free of it would free `current` without a panic.
     try testing.expect(!ranges.isLive(stale));
+    ranges.free(current);
 }

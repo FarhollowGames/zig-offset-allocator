@@ -42,12 +42,6 @@ pub fn build(b: *std.Build) void {
     ) orelse 0;
     const test_options = b.addOptions();
     test_options.addOption(u64, "fuzz_seed", fuzz_seed);
-    const skeptic_slow = b.option(
-        bool,
-        "skeptic-slow",
-        "Run the skeptic's slow tests (a generation wrap, about 3 minutes)",
-    ) orelse false;
-    test_options.addOption(bool, "skeptic_slow", skeptic_slow);
     const test_options_mod = test_options.createModule();
 
     const test_mod = b.createModule(.{
