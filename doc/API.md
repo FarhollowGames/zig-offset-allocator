@@ -99,11 +99,12 @@ std.debug.assert(!ranges.isLive(ubo)); // freeing it again would panic
   to the unit.
 - `reset()` frees everything and makes every outstanding handle stale.
 - `storageReport()` and `storageReportFull()`: the core's reports in bytes.
-- `Handle { offset: u64, node, generation: u32 }`.
+- `Handle { offset: u64, node, generation: u64 }`.
 
-A generation wraps after 2^32 frees of one node, so a handle that old would
-read as live again; a handle from another `Ranges` whose node is in range is
-not caught.
+A generation is 64 bits, so it wraps only after 2^64 frees of one node; a
+32-bit one wrapped after 2^32 allocate/free cycles of one node, minutes of
+a loop that allocates and frees one size. A handle from another `Ranges`
+whose node is in range is not caught.
 
 `Ranges` costs 0.0 to 1.6 ns per call over the core; see
 [`BENCHMARKS.md`](BENCHMARKS.md#the-ranges-layer). Its tests are described
