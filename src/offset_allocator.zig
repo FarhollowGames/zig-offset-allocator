@@ -503,7 +503,10 @@ pub fn AllocatorOf(comptime NodeIndex: type) type {
                 free_storage = self.free_storage;
                 if (self.used_bins_top != 0) {
                     const top_bin_index: u32 = 31 - @clz(self.used_bins_top);
-                    const leaf_bin_index: u32 = 7 - @clz(self.used_bins[top_bin_index]);
+                    // A u3, so that the compiler knows the leaf stays below
+                    // 8 and takes the bin size's exponent from the top bin.
+                    const leaf_bins: u32 = self.used_bins[top_bin_index];
+                    const leaf_bin_index: u3 = @intCast(31 - @clz(leaf_bins));
                     const bin_index = (top_bin_index << top_bins_index_shift) | leaf_bin_index;
                     largest_free_region = small_float.floatToUint(bin_index);
                     assert(free_storage >= largest_free_region);
