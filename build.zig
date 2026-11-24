@@ -42,6 +42,12 @@ pub fn build(b: *std.Build) void {
     ) orelse 0;
     const test_options = b.addOptions();
     test_options.addOption(u64, "fuzz_seed", fuzz_seed);
+    const skeptic_slow = b.option(
+        bool,
+        "skeptic-slow",
+        "Run the skeptic's slow tests (a generation wrap, about 3 minutes)",
+    ) orelse false;
+    test_options.addOption(bool, "skeptic_slow", skeptic_slow);
     const test_options_mod = test_options.createModule();
 
     const test_mod = b.createModule(.{
@@ -149,6 +155,24 @@ pub fn build(b: *std.Build) void {
     });
     differential.root_module.linkLibrary(reference);
     test_step.dependOn(&b.addRunArtifact(differential).step);
+
+    // The skeptic's tests (test/skeptic_test.zig), some against the original.
+    const skeptic = b.addTest(.{
+        .name = "skeptic",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/skeptic_test.zig"),
+            .target = target,
+            .optimize = test_optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "offset_allocator", .module = test_mod },
+                .{ .name = "build_options", .module = test_options_mod },
+            },
+        }),
+        .filters = test_filters,
+    });
+    skeptic.root_module.linkLibrary(reference);
+    test_step.dependOn(&b.addRunArtifact(skeptic).step);
 
     // The benchmark (bench/bench.zig): the port against the original, and
     // the Ranges layer against the port. The port in ReleaseFast unless
