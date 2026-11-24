@@ -18,12 +18,16 @@ A performance pass and a skeptic's review, on the branch
   left and none, zero-size requests in spaces of 0 to 12, 300,000 32-bit
   nodes run out, all 65,536 16-bit nodes over a 2^32 - 1 space) and 4,000
   more fuzz seeds per fuzzer agree, every field compared.
-- **Fixed**: a `Ranges` generation was 32 bits, and allocating and freeing
-  one size reuses the same node, so after 2^32 such cycles (about 3
-  minutes) a handle freed at the start read as live again, and freeing it
-  a second time did not panic. Generations are 64 bits now; `Handle` grows
-  from 16 to 24 bytes. Test: `skeptic: a Ranges generation does not wrap
-  after 2^32 cycles of one node`, which failed before the fix.
+- **Kept as a documented limit**: a `Ranges` generation is 32 bits and
+  wraps. Allocating and freeing one size reuses the same node, so after
+  2^32 such cycles (about 3 minutes of a bare loop, hours in an engine) a
+  handle from 2^32 frees ago reads as live again for one cycle in 2^32. A
+  64-bit generation would close that window, at 4 more bytes a node, 8 more
+  a `Handle` and a slower `Ranges.reset` (1.23 to 1.29 times the core's,
+  against 1.08 to 1.10); for a check of the safe builds that misses a stale
+  handle with a probability of about 2^-32, the 32 bits stay. `doc/API.md`
+  states the limit; test: `skeptic: a Ranges generation wraps at 2^32
+  without a panic, as documented`.
 - **Test gap closed**: `Ranges.storageReport().largest_free_region` was
   compared only where it equals the total; a version reporting the total
   as the largest region passed every test. `skeptic: Ranges.storageReport
@@ -191,6 +195,6 @@ comparisons above still cover every line of the translation.
 | `Ranges`, `Ranges16`, `RangesOf(Core)`; `init`, `deinit`, `unitBytes` | reviewed, ported | `test/ranges_test.zig`: fixed configurations and 1000 fuzzed seeds per width, against a model of the live ranges |
 | `allocate`, `free` | reviewed, benchmarked | the same; every offset a multiple of the unit, no shared bytes, sizes rounded up to the unit; `doc/BENCHMARKS.md` measures the layer's cost over the core |
 | `reset` | reviewed, benchmarked | every outstanding handle goes stale |
-| 64-bit generations | reviewed, ported | skeptic: `a Ranges generation does not wrap after 2^32 cycles of one node` |
+| generations wrap at 2^32 (documented limit) | reviewed, ported | skeptic: `a Ranges generation wraps at 2^32 without a panic, as documented` |
 | `checkHandle`, `isLive`, `HandleError` | reviewed, ported | stale, foreign and never-allocated handles; panic: `ranges_free_twice`, `ranges_free_after_reset` |
 | `sizeOf`, `storageReport`, `storageReportFull` | reviewed, ported | in bytes, against the model; skeptic: `largest_free_region` against the core's |

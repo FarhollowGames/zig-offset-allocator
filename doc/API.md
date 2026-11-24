@@ -99,12 +99,18 @@ std.debug.assert(!ranges.isLive(ubo)); // freeing it again would panic
   to the unit.
 - `reset()` frees everything and makes every outstanding handle stale.
 - `storageReport()` and `storageReportFull()`: the core's reports in bytes.
-- `Handle { offset: u64, node, generation: u64 }`.
+- `Handle { offset: u64, node, generation: u32 }`.
 
-A generation is 64 bits, so it wraps only after 2^64 frees of one node; a
-32-bit one wrapped after 2^32 allocate/free cycles of one node, minutes of
-a loop that allocates and frees one size. A handle from another `Ranges`
-whose node is in range is not caught.
+A generation is 32 bits and wraps. Once one node has been freed 2^32 times,
+a handle from 2^32 frees ago reads as live again for one cycle in every 2^32,
+while the node's generation equals its own. Allocating and freeing one size
+in a loop gives back the same node each time, so at 600,000 cycles a second
+a node gets there in about 2 hours; nodes that rotate, as in a per-frame
+batch freed in order, take years. The check is a debugging aid of the safe
+builds: a stale handle given to `free` or `isLive` is missed with a
+probability of about 2^-32. A handle from another `Ranges` whose node is in
+range is not caught, and nothing checks the memory itself: an offset kept
+and used after its `free` is not seen.
 
 `Ranges` costs 0.0 to 1.6 ns per call over the core; see
 [`BENCHMARKS.md`](BENCHMARKS.md#the-ranges-layer). Its tests are described

@@ -8,7 +8,7 @@
 //!   bytes: no other test compares it outside two fixed states.
 //! - `init` out of memory for `Allocator16` and `Ranges16`.
 //! - A `Ranges` generation after 2^32 allocate/free cycles of one node, set
-//!   directly: a stale handle must not read as live again.
+//!   directly: it wraps without a panic, and the documented limit holds.
 
 const std = @import("std");
 const testing = std.testing;
@@ -294,24 +294,29 @@ test "skeptic: init out of memory frees what it took, Allocator16 and Ranges16" 
     }
 }
 
-test "skeptic: a Ranges generation does not wrap after 2^32 cycles of one node" {
+test "skeptic: a Ranges generation wraps at 2^32 without a panic, as documented" {
     var ranges = try oa.Ranges.init(testing.allocator, 1 << 20, 16, 256);
     defer ranges.deinit(testing.allocator);
     // Allocating and freeing one size gives the same node back every time,
-    // so its generation moves on by one per cycle: an ordinary transient
-    // allocation reaches 2^32 cycles in minutes.
-    const stale = try ranges.allocate(256);
-    ranges.free(stale);
+    // so its generation moves on by one per cycle.
+    const oldest = try ranges.allocate(256);
+    ranges.free(oldest);
     var current = try ranges.allocate(256);
-    try testing.expectEqual(stale.node, current.node);
+    try testing.expectEqual(oldest.node, current.node);
     // Where 2^32 - 2 more cycles would leave the generation.
     ranges.generations[current.node] = std.math.maxInt(u32);
     current.generation = std.math.maxInt(u32);
+    const newest_stale = current;
+    // The free wraps the generation to 0 without an overflow panic.
     ranges.free(current);
     current = try ranges.allocate(256);
-    try testing.expectEqual(stale.node, current.node);
-    // `stale` was freed 2^32 cycles ago. It must not be live, or a second
-    // free of it would free `current` without a panic.
-    try testing.expect(!ranges.isLive(stale));
+    try testing.expectEqual(oldest.node, current.node);
+    try testing.expectEqual(@as(u32, 0), current.generation);
+    // The handle freed one cycle ago is stale.
+    try testing.expect(!ranges.isLive(newest_stale));
+    // The documented limit: the handle freed 2^32 cycles ago has the
+    // current generation again, so it reads as live, for this one cycle.
+    try testing.expect(ranges.isLive(oldest));
     ranges.free(current);
+    try testing.expect(!ranges.isLive(oldest));
 }

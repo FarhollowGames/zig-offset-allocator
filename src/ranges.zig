@@ -66,10 +66,8 @@ pub fn RangesOf(comptime Core: type) type {
         core: Core,
         /// The generation of each node, indexed like the core's nodes. An
         /// allocation's handle carries its node's generation; `free` and
-        /// `reset` move it on, so older handles stop matching. 64 bits: one
-        /// node can be allocated and freed again billions of times a day,
-        /// which would wrap 32 bits in minutes.
-        generations: []u64,
+        /// `reset` move it on, so older handles stop matching.
+        generations: []u32,
         /// log2 of the unit: offsets and sizes in bytes are units shifted
         /// left by this.
         shift: u5,
@@ -91,7 +89,7 @@ pub fn RangesOf(comptime Core: type) type {
             /// Internal: the core's node index.
             node: NodeIndex,
             /// Internal: the node's generation when it was allocated.
-            generation: u64,
+            generation: u32,
         };
 
         /// Ranges over `size_bytes` bytes in units of `unit` bytes, a power
@@ -110,7 +108,7 @@ pub fn RangesOf(comptime Core: type) type {
 
             var allocator = try Core.init(gpa, @intCast(size_bytes >> shift), max_allocs);
             errdefer allocator.deinit(gpa);
-            const generations = try gpa.alloc(u64, max_allocs);
+            const generations = try gpa.alloc(u32, max_allocs);
             @memset(generations, 0);
 
             return .{ .core = allocator, .generations = generations, .shift = shift };
@@ -134,8 +132,8 @@ pub fn RangesOf(comptime Core: type) type {
             // Whole vectors, then the rest: the compiler leaves the plain
             // loop scalar.
             const generations = self.generations;
-            const lanes = 64 / @sizeOf(u64);
-            const Lanes = @Vector(lanes, u64);
+            const lanes = 64 / @sizeOf(u32);
+            const Lanes = @Vector(lanes, u32);
             var i: usize = 0;
             while (i + lanes <= generations.len) : (i += lanes) {
                 const next: Lanes = generations[i..][0..lanes].*;
@@ -192,7 +190,10 @@ pub fn RangesOf(comptime Core: type) type {
         /// safe builds. A handle from another allocator with a node in range
         /// is not caught.
         ///
-        /// A generation wraps only after 2^64 frees of one node.
+        /// A generation is 32 bits and wraps. After 2^32 frees of one node, a
+        /// handle that old reads as live again while the node's generation
+        /// equals its own, one cycle in 2^32. Allocating and freeing one size
+        /// in a loop reuses the same node, so that can take hours.
         pub fn checkHandle(self: *const Self, handle: Handle) HandleError!void {
             if (handle.node >= self.generations.len) return error.NodeOutOfRange;
             if (self.generations[handle.node] != handle.generation) return error.StaleGeneration;

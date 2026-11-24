@@ -22,13 +22,13 @@ one process are compared.
   node in `insertNodeIntoBin` (churn free 10 to 20 percent slower), and
   using the bin's next node from a register instead of reloading the bin
   head (0.92 to 1.10 before / after, within the noise).
-- **The skeptic's fix** makes `Ranges` generations 64 bits (see
-  `STATUS.md`). Its cost shows in `Ranges` reset, which writes twice the
-  bytes: 1.23 to 1.29 times the core's, from 1.08 to 1.10 before.
-- The port takes more time than the original in churn allocate (1.09
-  and 1.10) and fill allocate with 32-bit indices (1.06) on this machine;
-  both are faster or equal on the Ryzen. Every other row is within 5
-  percent or faster.
+- **Tried and reverted, in `Ranges`**: 64-bit generations, against the
+  32-bit ones wrapping (see `STATUS.md`). `Ranges` reset wrote twice the
+  bytes and took 1.23 to 1.29 times the core's, against 1.08 to 1.10.
+- With 32-bit indices the port takes more time than the original in
+  churn allocate (1.10), churn free (1.11) and fill allocate (1.07) on this
+  machine; all three are within 4 percent or faster on the Ryzen. Every
+  other row is within 4 percent or faster.
 
 ## Method
 
@@ -89,38 +89,38 @@ zig build bench -Dbench-cpu=2          # pin to one CPU with taskset (Linux)
 
 Intel Xeon @ 2.10 GHz (family 6, model 207), 4 vCPUs under KVM, Linux
 6.18, Zig 0.17.0 (and its clang for the original), at the branch
-`review/perf-and-skeptic-2` with the 64-bit `Ranges` generations, pinned to
-one CPU (`taskset -c 2`); a load average of 1.2 to 1.9 on 4 vCPUs. Three
+`review/perf-and-skeptic-2`, pinned to
+one CPU (`taskset -c 2`); a load average of about 1 on 4 vCPUs. Three
 invocations, as below:
 
 | workload | op | node index | original | port | port / original | 3 runs | Ranges | Ranges / port |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| steady state, 10k live | allocate | u32 | 19.8 (19.6–21.0) | 16.8 (16.5–17.4) | 0.85 | 0.85–0.87 | 19.1 (19.0–19.8) | 1.14 |
-| steady state, 10k live | free | u32 | 24.7 (24.4–25.8) | 24.6 (24.3–25.1) | 0.99 | 0.97–1.01 | 25.9 (25.6–26.9) | 1.05 |
-| steady state, 10k live | allocate | u16 | 19.2 (18.9–20.6) | 15.7 (15.3–16.5) | 0.82 | 0.80–0.83 | 18.9 (18.2–20.4) | 1.20 |
-| steady state, 10k live | free | u16 | 22.1 (22.0–22.6) | 21.5 (20.8–22.4) | 0.97 | 0.96–0.98 | 23.7 (22.7–24.7) | 1.10 |
-| fill 10k, free all | allocate | u32 | 14.3 (13.8–14.7) | 15.1 (14.7–15.5) | 1.06 | 1.02–1.10 | 16.3 (15.5–16.7) | 1.07 |
-| fill 10k, free all | free | u32 | 23.6 (23.1–24.8) | 22.5 (21.2–23.8) | 0.96 | 0.96–0.99 | 24.2 (23.4–25.7) | 1.08 |
-| fill 10k, free all | allocate | u16 | 13.6 (12.8–14.6) | 14.0 (13.7–16.1) | 1.03 | 0.99–1.06 | 15.2 (14.7–16.0) | 1.09 |
-| fill 10k, free all | free | u16 | 23.1 (21.0–28.3) | 21.2 (20.1–28.7) | 0.92 | 0.92–0.95 | 22.8 (21.8–27.6) | 1.07 |
-| churn, 256 x 64 KiB per frame | allocate | u32 | 13.4 (12.8–14.5) | 14.6 (14.2–15.3) | 1.09 | 1.07–1.11 | 14.6 (14.2–15.7) | 1.00 |
-| churn, 256 x 64 KiB per frame | free | u32 | 10.1 (9.9–10.8) | 10.5 (9.8–11.6) | 1.04 | 1.01–1.08 | 12.2 (11.9–13.4) | 1.16 |
-| churn, 256 x 64 KiB per frame | allocate | u16 | 12.5 (12.2–14.1) | 13.7 (13.5–14.6) | 1.10 | 1.10–1.11 | 13.0 (12.7–13.3) | 0.95 |
-| churn, 256 x 64 KiB per frame | free | u16 | 12.6 (11.8–15.7) | 10.1 (9.2–15.0) | 0.80 | 0.76–0.80 | 12.6 (12.4–15.0) | 1.25 |
-| fill 30k small, free all | allocate | u32 | 14.2 (14.0–15.2) | 13.9 (13.7–14.5) | 0.98 | 0.96–1.02 | 15.5 (15.2–16.4) | 1.12 |
-| fill 30k small, free all | free | u32 | 25.8 (25.2–27.5) | 23.7 (23.1–24.0) | 0.92 | 0.92–0.95 | 27.9 (26.6–29.8) | 1.18 |
-| fill 30k small, free all | allocate | u16 | 13.2 (13.1–13.9) | 13.4 (13.2–14.1) | 1.02 | 0.98–1.02 | 14.1 (13.8–15.2) | 1.05 |
-| fill 30k small, free all | free | u16 | 24.9 (23.9–25.8) | 21.9 (21.2–23.6) | 0.88 | 0.86–0.89 | 25.2 (23.1–27.4) | 1.15 |
-| bin search, 8000 holes | allocate | u32 | 25.6 (23.6–25.8) | 26.6 (25.1–27.7) | 1.04 | 0.98–1.13 | 27.4 (26.7–29.9) | 1.03 |
-| bin search, 8000 holes | free | u32 | 24.6 (22.2–27.0) | 23.5 (21.7–25.6) | 0.96 | 0.96–1.14 | 23.3 (21.6–25.0) | 0.99 |
-| bin search, 8000 holes | allocate | u16 | 24.6 (22.9–26.4) | 23.9 (22.6–25.6) | 0.97 | 0.97–1.01 | 26.3 (25.3–28.0) | 1.10 |
-| bin search, 8000 holes | free | u16 | 21.6 (20.8–23.7) | 20.9 (20.1–22.3) | 0.97 | 0.93–1.00 | 19.5 (19.3–21.7) | 0.93 |
-| reset | reset | u32 | 31454 (31308–31858) | 29852 (29184–32044) | 0.95 | 0.92–1.07 | 38615 (36275–38946) | 1.29 |
-| reset | reset | u16 | 25005 (24692–29407) | 20528 (20202–24907) | 0.82 | 0.80–0.83 | 25349 (25292–31009) | 1.23 |
-| storageReport | report | u32 | 1.2 (1.2–1.3) | 1.3 (1.3–1.4) | 1.05 | 1.05–1.07 | 1.5 (1.4–1.5) | 1.18 |
-| storageReport | report | u16 | 1.2 (1.2–1.2) | 1.3 (1.3–1.3) | 1.03 | 0.97–1.05 | 1.4 (1.4–1.4) | 1.08 |
-| storageReportFull, 5001 free regions | report | u32 | 29618 (27809–32076) | 28884 (27812–30697) | 0.98 | 0.98–1.02 | 27629 (27088–31774) | 0.96 |
-| storageReportFull, 5001 free regions | report | u16 | 24037 (23655–24585) | 24244 (23344–24999) | 1.01 | 1.01–1.02 | 23850 (23563–24972) | 0.98 |
+| steady state, 10k live | allocate | u32 | 16.8 (16.8–17.0) | 14.3 (14.1–14.4) | 0.85 | 0.81–0.86 | 16.2 (16.0–16.3) | 1.13 |
+| steady state, 10k live | free | u32 | 21.0 (20.9–21.1) | 20.5 (20.4–20.5) | 0.98 | 0.88–0.98 | 21.8 (21.6–21.8) | 1.06 |
+| steady state, 10k live | allocate | u16 | 16.1 (15.9–16.3) | 13.2 (13.2–13.3) | 0.82 | 0.80–0.82 | 15.2 (15.1–15.5) | 1.15 |
+| steady state, 10k live | free | u16 | 18.7 (18.7–18.9) | 18.3 (18.2–18.4) | 0.98 | 0.94–0.98 | 19.4 (19.1–19.7) | 1.06 |
+| fill 10k, free all | allocate | u32 | 11.3 (11.2–11.4) | 12.1 (11.9–12.2) | 1.07 | 1.07–1.08 | 12.2 (11.9–12.3) | 1.01 |
+| fill 10k, free all | free | u32 | 19.0 (18.9–19.2) | 18.2 (18.1–18.4) | 0.96 | 0.95–0.97 | 19.4 (19.1–19.6) | 1.07 |
+| fill 10k, free all | allocate | u16 | 10.7 (10.6–10.9) | 11.1 (11.0–11.4) | 1.03 | 1.03–1.04 | 11.3 (11.2–11.4) | 1.02 |
+| fill 10k, free all | free | u16 | 17.5 (17.4–17.6) | 16.7 (16.6–17.0) | 0.95 | 0.95–0.96 | 17.6 (17.6–17.8) | 1.06 |
+| churn, 256 x 64 KiB per frame | allocate | u32 | 11.1 (11.0–11.3) | 12.2 (12.0–12.3) | 1.10 | 1.09–1.10 | 12.2 (12.0–12.2) | 1.00 |
+| churn, 256 x 64 KiB per frame | free | u32 | 9.0 (8.9–9.2) | 10.0 (9.9–10.1) | 1.11 | 1.08–1.16 | 11.4 (11.3–11.5) | 1.14 |
+| churn, 256 x 64 KiB per frame | allocate | u16 | 10.6 (10.5–10.8) | 11.1 (10.9–11.1) | 1.04 | 0.99–1.06 | 11.3 (11.2–11.5) | 1.02 |
+| churn, 256 x 64 KiB per frame | free | u16 | 10.3 (10.3–10.5) | 9.9 (9.8–10.0) | 0.96 | 0.83–0.96 | 11.7 (11.5–11.8) | 1.18 |
+| fill 30k small, free all | allocate | u32 | 12.1 (12.0–12.2) | 12.2 (12.0–12.6) | 1.01 | 1.00–1.03 | 13.0 (12.8–13.1) | 1.07 |
+| fill 30k small, free all | free | u32 | 22.1 (21.9–22.4) | 20.2 (19.9–20.5) | 0.92 | 0.90–0.92 | 25.0 (24.8–26.2) | 1.24 |
+| fill 30k small, free all | allocate | u16 | 11.5 (11.2–11.7) | 11.1 (11.1–11.2) | 0.96 | 0.96–0.98 | 11.5 (11.4–11.7) | 1.03 |
+| fill 30k small, free all | free | u16 | 20.4 (20.2–20.6) | 18.3 (18.2–18.5) | 0.90 | 0.89–0.90 | 20.2 (19.2–20.4) | 1.10 |
+| bin search, 8000 holes | allocate | u32 | 20.1 (19.9–20.8) | 20.8 (20.2–21.4) | 1.03 | 1.01–1.04 | 22.7 (22.4–23.4) | 1.09 |
+| bin search, 8000 holes | free | u32 | 18.5 (18.0–18.7) | 18.1 (18.0–18.5) | 0.98 | 0.96–1.01 | 18.3 (18.2–18.6) | 1.01 |
+| bin search, 8000 holes | allocate | u16 | 19.8 (19.5–19.9) | 19.1 (19.0–19.3) | 0.96 | 0.95–0.97 | 21.5 (21.4–21.9) | 1.13 |
+| bin search, 8000 holes | free | u16 | 17.3 (17.2–17.6) | 16.7 (16.6–16.7) | 0.96 | 0.95–0.99 | 16.7 (16.4–17.0) | 1.00 |
+| reset | reset | u32 | 23856 (23303–24194) | 17621 (17047–17703) | 0.74 | 0.74–0.75 | 20055 (19287–20713) | 1.14 |
+| reset | reset | u16 | 19799 (19585–20047) | 14819 (14794–15352) | 0.75 | 0.75–0.76 | 17083 (17036–17143) | 1.15 |
+| storageReport | report | u32 | 1.1 (1.1–1.1) | 1.1 (1.1–1.1) | 1.04 | 1.03–1.04 | 1.1 (1.1–1.5) | 1.03 |
+| storageReport | report | u16 | 1.1 (1.1–1.2) | 1.1 (1.1–1.5) | 1.04 | 1.04–1.04 | 1.1 (1.1–1.1) | 1.03 |
+| storageReportFull, 5001 free regions | report | u32 | 26377 (26320–26458) | 26544 (26440–26611) | 1.01 | 1.01–1.01 | 26655 (26647–26791) | 1.00 |
+| storageReportFull, 5001 free regions | report | u16 | 21024 (20944–21428) | 21257 (21208–21347) | 1.01 | 0.99–1.01 | 21527 (21407–21606) | 1.01 |
 
 ## Machine, 11 November 2026
 
@@ -165,9 +165,8 @@ handle.
 The 16-bit `Ranges` reset moved the most between invocations, from 4.0 to
 5.0 µs, against 3.3 µs for the core's; earlier runs had it at 3.9 µs.
 
-These are the 32-bit generations of 11 November. With the 64-bit ones of
-24 November, on the Xeon, `Ranges` reset takes about 5 to 9 µs more than
-the core's on 32768 nodes, and the other calls 0.0 to 3.2 ns more.
+With 64-bit generations, tried on 24 November on the Xeon and reverted,
+`Ranges` reset took about 5 to 9 µs more than the core's on 32768 nodes.
 
 ## Results, ReleaseSafe, 11 November 2026
 

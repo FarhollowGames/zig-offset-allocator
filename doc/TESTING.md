@@ -152,7 +152,9 @@ contract program `test/panic.zig`.
   16-bit nodes over a 2^32 - 1 space), every field compared;
   `Ranges.storageReport().largest_free_region` against the core's; `init`
   out of memory for `Allocator16` and `Ranges16`; and a `Ranges`
-  generation set where 2^32 cycles of one node leave it.
+  generation set where 2^32 cycles of one node leave it, which wraps
+  without a panic and reads an old handle as live for that one cycle, as
+  `doc/API.md` says.
 
 [`STATUS.md`](../STATUS.md) names the tests for every function, option and
 build switch of the original.
@@ -196,9 +198,11 @@ SmallFloat sweep runs on 16 threads only to finish sooner.
 ### Bugs the tests found and caught
 
 - Three bugs planted on purpose were each caught by the tests.
-- At the review of 24 November 2026: a 32-bit `Ranges` generation wrapped
-  after 2^32 allocate/free cycles of one node, so a stale handle read as
-  live again (fixed: 64 bits); and a planted bug reporting the total free
+- At the review of 24 November 2026: a 32-bit `Ranges` generation wraps
+  after 2^32 allocate/free cycles of one node, which one size allocated and
+  freed in a loop reaches in hours, so a stale handle reads as live for one
+  cycle in 2^32 (kept, and documented in `doc/API.md`); and a planted bug
+  reporting the total free
   space as `Ranges`' largest free region passed every test until the
   skeptic's test.
 - The tests found two inputs where the original reads or writes out of
