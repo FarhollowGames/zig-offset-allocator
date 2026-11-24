@@ -3,6 +3,33 @@
 These are measurements on one machine, under the conditions below. They
 are not a verdict on either side.
 
+## Review, 24 November 2026
+
+A performance pass and a skeptic's review, at the branch
+`review/perf-and-skeptic-2`, on an Intel Xeon @ 2.10 GHz (family 6, model
+207), 4 vCPUs under KVM, Linux 6.18, Zig 0.17.0, pinned to one CPU. This
+machine is about twice as slow as the Ryzen below and noisier: whole
+invocations ran up to twice as slow at times, so only ratios measured in
+one process are compared.
+
+- **New workloads**: many small allocations, a bin search through 8000
+  holes, and `storageReport` (see Method). The `storageReport` loops now
+  use the same compiler barrier as the original's.
+- **Kept**: `storageReport` takes the bin size's exponent from the top
+  bin, 1.52 to 1.59 times as fast as before (2.2 to 1.4 ns); it now
+  compiles to the original's instructions.
+- **Tried and dropped**: writing a new node's neighbour links with the
+  node in `insertNodeIntoBin` (churn free 10 to 20 percent slower), and
+  using the bin's next node from a register instead of reloading the bin
+  head (0.92 to 1.10 before / after, within the noise).
+- **The skeptic's fix** makes `Ranges` generations 64 bits (see
+  `STATUS.md`). Its cost shows in `Ranges` reset, which writes twice the
+  bytes: 1.23 to 1.29 times the core's, from 1.08 to 1.10 before.
+- The port takes more time than the original in churn allocate (1.09
+  and 1.10) and fill allocate with 32-bit indices (1.06) on this machine;
+  both are faster or equal on the Ryzen. Every other row is within 5
+  percent or faster.
+
 ## Method
 
 `zig build bench` runs the original, the port and the `Ranges` layer on the
@@ -34,25 +61,74 @@ percent to 1 MiB, 5 percent to 16 MiB, in a 16 GiB space with 32768 nodes.
 - **churn**: 2000 resident, then 400 frames of 256 allocations of 64 KiB,
   freed in order;
 - **reset**: 50 resets of an allocator of 32768 nodes;
-- **storageReportFull**: 200 full reports over 5001 free regions.
+- **storageReportFull**: 200 full reports over 5001 free regions;
+- **fill 30k small, free all**: 30,000 allocations of 1 to 16 units
+  (256 B to 4 KiB), then all freed in random order, 10 times;
+- **bin search, 8000 holes**: 8000 free 1 MiB holes between 1-unit
+  allocations, then 200 frames of 256 log-uniform requests of 1 unit to a
+  hole, whose own bins are mostly empty, so allocate searches the bins
+  above; each frame is freed in order, which merges the holes back;
+- **storageReport**: 100,000 calls over the state `storageReportFull`
+  reports on.
+
+The last three were added at the review of 24 November 2026; the tables
+of 11 November below do not have them.
 
 ## Command
 
 ```sh
 zig build bench                        # 11 runs of every workload
 zig build bench -- <runs> <workload>   # workload: steady, fill_free, churn,
-                                       # reset or report_full
+                                       # small, bin_search, reset, report
+                                       # or report_full
 zig build bench -Dbench-optimize=ReleaseSafe
 zig build bench -Dbench-cpu=2          # pin to one CPU with taskset (Linux)
 ```
 
-## Machine
+## Results, ReleaseFast, 24 November 2026
+
+Intel Xeon @ 2.10 GHz (family 6, model 207), 4 vCPUs under KVM, Linux
+6.18, Zig 0.17.0 (and its clang for the original), at the branch
+`review/perf-and-skeptic-2` with the 64-bit `Ranges` generations, pinned to
+one CPU (`taskset -c 2`); a load average of 1.2 to 1.9 on 4 vCPUs. Three
+invocations, as below:
+
+| workload | op | node index | original | port | port / original | 3 runs | Ranges | Ranges / port |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| steady state, 10k live | allocate | u32 | 19.8 (19.6–21.0) | 16.8 (16.5–17.4) | 0.85 | 0.85–0.87 | 19.1 (19.0–19.8) | 1.14 |
+| steady state, 10k live | free | u32 | 24.7 (24.4–25.8) | 24.6 (24.3–25.1) | 0.99 | 0.97–1.01 | 25.9 (25.6–26.9) | 1.05 |
+| steady state, 10k live | allocate | u16 | 19.2 (18.9–20.6) | 15.7 (15.3–16.5) | 0.82 | 0.80–0.83 | 18.9 (18.2–20.4) | 1.20 |
+| steady state, 10k live | free | u16 | 22.1 (22.0–22.6) | 21.5 (20.8–22.4) | 0.97 | 0.96–0.98 | 23.7 (22.7–24.7) | 1.10 |
+| fill 10k, free all | allocate | u32 | 14.3 (13.8–14.7) | 15.1 (14.7–15.5) | 1.06 | 1.02–1.10 | 16.3 (15.5–16.7) | 1.07 |
+| fill 10k, free all | free | u32 | 23.6 (23.1–24.8) | 22.5 (21.2–23.8) | 0.96 | 0.96–0.99 | 24.2 (23.4–25.7) | 1.08 |
+| fill 10k, free all | allocate | u16 | 13.6 (12.8–14.6) | 14.0 (13.7–16.1) | 1.03 | 0.99–1.06 | 15.2 (14.7–16.0) | 1.09 |
+| fill 10k, free all | free | u16 | 23.1 (21.0–28.3) | 21.2 (20.1–28.7) | 0.92 | 0.92–0.95 | 22.8 (21.8–27.6) | 1.07 |
+| churn, 256 x 64 KiB per frame | allocate | u32 | 13.4 (12.8–14.5) | 14.6 (14.2–15.3) | 1.09 | 1.07–1.11 | 14.6 (14.2–15.7) | 1.00 |
+| churn, 256 x 64 KiB per frame | free | u32 | 10.1 (9.9–10.8) | 10.5 (9.8–11.6) | 1.04 | 1.01–1.08 | 12.2 (11.9–13.4) | 1.16 |
+| churn, 256 x 64 KiB per frame | allocate | u16 | 12.5 (12.2–14.1) | 13.7 (13.5–14.6) | 1.10 | 1.10–1.11 | 13.0 (12.7–13.3) | 0.95 |
+| churn, 256 x 64 KiB per frame | free | u16 | 12.6 (11.8–15.7) | 10.1 (9.2–15.0) | 0.80 | 0.76–0.80 | 12.6 (12.4–15.0) | 1.25 |
+| fill 30k small, free all | allocate | u32 | 14.2 (14.0–15.2) | 13.9 (13.7–14.5) | 0.98 | 0.96–1.02 | 15.5 (15.2–16.4) | 1.12 |
+| fill 30k small, free all | free | u32 | 25.8 (25.2–27.5) | 23.7 (23.1–24.0) | 0.92 | 0.92–0.95 | 27.9 (26.6–29.8) | 1.18 |
+| fill 30k small, free all | allocate | u16 | 13.2 (13.1–13.9) | 13.4 (13.2–14.1) | 1.02 | 0.98–1.02 | 14.1 (13.8–15.2) | 1.05 |
+| fill 30k small, free all | free | u16 | 24.9 (23.9–25.8) | 21.9 (21.2–23.6) | 0.88 | 0.86–0.89 | 25.2 (23.1–27.4) | 1.15 |
+| bin search, 8000 holes | allocate | u32 | 25.6 (23.6–25.8) | 26.6 (25.1–27.7) | 1.04 | 0.98–1.13 | 27.4 (26.7–29.9) | 1.03 |
+| bin search, 8000 holes | free | u32 | 24.6 (22.2–27.0) | 23.5 (21.7–25.6) | 0.96 | 0.96–1.14 | 23.3 (21.6–25.0) | 0.99 |
+| bin search, 8000 holes | allocate | u16 | 24.6 (22.9–26.4) | 23.9 (22.6–25.6) | 0.97 | 0.97–1.01 | 26.3 (25.3–28.0) | 1.10 |
+| bin search, 8000 holes | free | u16 | 21.6 (20.8–23.7) | 20.9 (20.1–22.3) | 0.97 | 0.93–1.00 | 19.5 (19.3–21.7) | 0.93 |
+| reset | reset | u32 | 31454 (31308–31858) | 29852 (29184–32044) | 0.95 | 0.92–1.07 | 38615 (36275–38946) | 1.29 |
+| reset | reset | u16 | 25005 (24692–29407) | 20528 (20202–24907) | 0.82 | 0.80–0.83 | 25349 (25292–31009) | 1.23 |
+| storageReport | report | u32 | 1.2 (1.2–1.3) | 1.3 (1.3–1.4) | 1.05 | 1.05–1.07 | 1.5 (1.4–1.5) | 1.18 |
+| storageReport | report | u16 | 1.2 (1.2–1.2) | 1.3 (1.3–1.3) | 1.03 | 0.97–1.05 | 1.4 (1.4–1.4) | 1.08 |
+| storageReportFull, 5001 free regions | report | u32 | 29618 (27809–32076) | 28884 (27812–30697) | 0.98 | 0.98–1.02 | 27629 (27088–31774) | 0.96 |
+| storageReportFull, 5001 free regions | report | u16 | 24037 (23655–24585) | 24244 (23344–24999) | 1.01 | 1.01–1.02 | 23850 (23563–24972) | 0.98 |
+
+## Machine, 11 November 2026
 
 AMD Ryzen 9 9950X3D, Linux 7.3, Zig 0.17.0 (and its clang for the
 original), 11 November 2026, at commit `bb82860`. The one-minute load
 average was 2.8 during the runs, on 32 hardware threads.
 
-## Results, ReleaseFast
+## Results, ReleaseFast, 11 November 2026
 
 | workload | op | node index | original | port | port / original | 3 runs | Ranges | Ranges / port |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -89,7 +165,11 @@ handle.
 The 16-bit `Ranges` reset moved the most between invocations, from 4.0 to
 5.0 µs, against 3.3 µs for the core's; earlier runs had it at 3.9 µs.
 
-## Results, ReleaseSafe
+These are the 32-bit generations of 11 November. With the 64-bit ones of
+24 November, on the Xeon, `Ranges` reset takes about 5 to 9 µs more than
+the core's on 32768 nodes, and the other calls 0.0 to 3.2 ns more.
+
+## Results, ReleaseSafe, 11 November 2026
 
 The port's asserts and bounds checks on, and the `Ranges` check; the
 original still at `-O3` without its asserts. Medians:
@@ -116,7 +196,7 @@ original still at `-O3` without its asserts. Medians:
 `storageReportFull` comes out faster in ReleaseSafe than in ReleaseFast on
 this machine; the two modes lay out its list walk differently.
 
-## The performance pass
+## The performance pass, 11 November 2026
 
 The port before and after its performance pass, ReleaseFast, measured
 during the pass, before the tables above. "Before" was measured in an

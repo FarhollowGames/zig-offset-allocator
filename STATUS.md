@@ -1,5 +1,37 @@
 # Status: feature parity with the original
 
+## Review, 24 November 2026
+
+A performance pass and a skeptic's review, on the branch
+`review/perf-and-skeptic-2`; not released. The tests pass in ReleaseSafe
+(43 tests and 10 contract runs) and ReleaseFast (43 tests).
+
+- **Performance**: `storageReport` is 1.52 to 1.59 times as fast as
+  before, equal to the original within 7 percent; the benchmark has three
+  new workloads (small allocations, bin searches, `storageReport`). Two
+  changes to allocate and free showed no gain and were dropped.
+  [`doc/BENCHMARKS.md`](doc/BENCHMARKS.md#review-24-november-2026) has
+  the numbers.
+- **Skeptic**: no input found where the core's results or state differ
+  from the original's, and no overflow, undefined behaviour or leak in
+  the core. New differential runs at the edges (exact fits with one node
+  left and none, zero-size requests in spaces of 0 to 12, 300,000 32-bit
+  nodes run out, all 65,536 16-bit nodes over a 2^32 - 1 space) and 4,000
+  more fuzz seeds per fuzzer agree, every field compared.
+- **Fixed**: a `Ranges` generation was 32 bits, and allocating and freeing
+  one size reuses the same node, so after 2^32 such cycles (about 3
+  minutes) a handle freed at the start read as live again, and freeing it
+  a second time did not panic. Generations are 64 bits now; `Handle` grows
+  from 16 to 24 bytes. Test: `skeptic: a Ranges generation does not wrap
+  after 2^32 cycles of one node`, which failed before the fix.
+- **Test gap closed**: `Ranges.storageReport().largest_free_region` was
+  compared only where it equals the total; a version reporting the total
+  as the largest region passed every test. `skeptic: Ranges.storageReport
+  largest_free_region is the core's, in bytes` catches it.
+
+The tests named below are in `test/`; `test/skeptic_test.zig` holds the
+review's.
+
 zig-offset-allocator aims to do everything OffsetAllocator does, with
 identical results. This file lists every public function, type, constant
 and build-time switch of the original (sebbbi/OffsetAllocator at commit
@@ -41,7 +73,7 @@ invariants aborts the reference too.
 | `free` of a node index past the nodes (undefined in the original) | a bounds-check panic in safe builds | reviewed, ported | panic: `free_foreign` |
 | `allocationSize(allocation)` | `allocationSize(allocation)` | reviewed, oracle-tested | differential: every successful allocation, and every live allocation at each full comparison |
 | `allocationSize` of a default or failed `Allocation` | `allocationSize(Allocation.none)`, 0 | reviewed, oracle-tested | differential, both widths (see 16-bit below) |
-| `storageReport()` | `storageReport()`, `StorageReport{ total_free_space, largest_free_region }` | reviewed, oracle-tested | differential after every call; property: matches the model, and both 0 when out of nodes |
+| `storageReport()` | `storageReport()`, `StorageReport{ total_free_space, largest_free_region }` | reviewed, oracle-tested | differential after every call; property: matches the model, and both 0 when out of nodes; skeptic: the edge runs |
 | `storageReportFull()` | `storageReportFull()`, `StorageReportFull{ free_regions: [256]Region{ size, count } }` | reviewed, benchmarked | differential after every call, all 256 bins, including the wrapped sizes of bins 240 to 255 |
 | `Allocation { offset, metadata }`, defaulting to `NO_SPACE` | `Allocation { offset, metadata }`; the default is `Allocation.none` | reviewed, oracle-tested | its fields compared on every allocation |
 | `Allocation::NO_SPACE` | `no_space` | reviewed, oracle-tested | as above |
@@ -159,5 +191,6 @@ comparisons above still cover every line of the translation.
 | `Ranges`, `Ranges16`, `RangesOf(Core)`; `init`, `deinit`, `unitBytes` | reviewed, ported | `test/ranges_test.zig`: fixed configurations and 1000 fuzzed seeds per width, against a model of the live ranges |
 | `allocate`, `free` | reviewed, benchmarked | the same; every offset a multiple of the unit, no shared bytes, sizes rounded up to the unit; `doc/BENCHMARKS.md` measures the layer's cost over the core |
 | `reset` | reviewed, benchmarked | every outstanding handle goes stale |
+| 64-bit generations | reviewed, ported | skeptic: `a Ranges generation does not wrap after 2^32 cycles of one node` |
 | `checkHandle`, `isLive`, `HandleError` | reviewed, ported | stale, foreign and never-allocated handles; panic: `ranges_free_twice`, `ranges_free_after_reset` |
-| `sizeOf`, `storageReport`, `storageReportFull` | reviewed, ported | in bytes, against the model |
+| `sizeOf`, `storageReport`, `storageReportFull` | reviewed, ported | in bytes, against the model; skeptic: `largest_free_region` against the core's |

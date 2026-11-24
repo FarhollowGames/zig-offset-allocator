@@ -107,7 +107,7 @@ listed in [`STATUS.md`](STATUS.md#left-out). In short:
 
 ## Tests
 
-`zig build test` runs 36 tests and 10 runs of a contract program. The
+`zig build test` runs 43 tests and 10 runs of a contract program. The
 differential tests run the original, built from `reference/` with its own
 asserts on, beside both widths of the port, about 2.07 million calls and
 1,000 fuzzed configurations per width, and compare every result and every

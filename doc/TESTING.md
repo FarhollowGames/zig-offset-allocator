@@ -103,9 +103,9 @@ integers.
 
 ### Tests and counts
 
-`zig build test` runs 36 tests (`test/differential.zig`,
-`test/original_test.zig`, `test/property_test.zig` and
-`test/ranges_test.zig`) and, in Debug and ReleaseSafe, 10 runs of the
+`zig build test` runs 43 tests (`test/differential.zig`,
+`test/original_test.zig`, `test/property_test.zig`,
+`test/ranges_test.zig` and `test/skeptic_test.zig`) and, in Debug and ReleaseSafe, 10 runs of the
 contract program `test/panic.zig`.
 
 - **Differential runs**: random sequences of allocates and frees, about
@@ -145,6 +145,14 @@ contract program `test/panic.zig`.
   is not live after a free or a reset, a reused node gets a new generation,
   a 1 TiB space in 1 MiB units hands out ranges past 4 GiB, and requests
   past 2^32 - 1 units fail.
+- **The skeptic's tests** (`test/skeptic_test.zig`, 24 November 2026):
+  differential runs at edges the other runs do not aim for (exact fits
+  with one node left and none, zero-size requests in spaces of 0 to 12,
+  300,000 32-bit nodes run out then freed in random order, all 65,536
+  16-bit nodes over a 2^32 - 1 space), every field compared;
+  `Ranges.storageReport().largest_free_region` against the core's; `init`
+  out of memory for `Allocator16` and `Ranges16`; and a `Ranges`
+  generation set where 2^32 cycles of one node leave it.
 
 [`STATUS.md`](../STATUS.md) names the tests for every function, option and
 build switch of the original.
@@ -188,6 +196,11 @@ SmallFloat sweep runs on 16 threads only to finish sooner.
 ### Bugs the tests found and caught
 
 - Three bugs planted on purpose were each caught by the tests.
+- At the review of 24 November 2026: a 32-bit `Ranges` generation wrapped
+  after 2^32 allocate/free cycles of one node, so a stale handle read as
+  live again (fixed: 64 bits); and a planted bug reporting the total free
+  space as `Ranges`' largest free region passed every test until the
+  skeptic's test.
 - The tests found two inputs where the original reads or writes out of
   bounds: fewer than 2 nodes, and `allocationSize` of an empty allocation
   in 16-bit mode with fewer than 65,536 nodes. The port guards them
@@ -202,6 +215,7 @@ the asserts.
 
 ### State
 
-`STATUS.md` marks each item as ported, oracle-tested or benchmarked. None is
-marked reviewed yet: that state is set at a release, after the review
-above.
+`STATUS.md` marks each item as ported, oracle-tested or benchmarked, and
+every item not left out as reviewed: that state was set at release 0.1.0,
+after the review above. The review of 24 November 2026 is at the top of
+`STATUS.md`.
